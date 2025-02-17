@@ -1,0 +1,256 @@
+---
+title: "MATH167R_Final_Project_Inferential_Analysis"
+author: "Ryan Miller"
+date: "2024-11-22"
+output: html_document
+---
+
+```{r, results='hide', error=FALSE, warning=FALSE, message=FALSE}
+# Load libraries I probably need
+
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(readr)
+library(lmtest)
+```
+
+```{r, results='hide', error=FALSE, warning=FALSE, message=FALSE}
+# Load NFL Dataset
+NFL_Data <- read_csv("/Users/RyanMiller/Documents/MATH167R/team_stats_2003_2023.csv")
+```
+
+
+```{r}
+### Data Cleaning: mov and ties variables
+
+# Calculate mov for N/A values
+NFL_Data_Clean <- NFL_Data |>
+  mutate(
+    ties = ifelse(is.na(ties), 0, ties),
+    mov = round((points - points_opp) / g, 1)
+  )
+
+### Data Cleaning: Creating a 'rank' column
+NFL_Data_Clean <- NFL_Data_Clean |>
+  group_by(year) |>
+  arrange(desc(win_loss_perc)) |>
+  mutate(rank = row_number()) |>
+  ungroup()
+
+### Data Cleaning: Cutoff Teams
+
+# Define cutoff points for 5 categories (Top, Good, Mid, Poor, Terrible)
+top_cutoff <- floor(0.10 * 32)     # Top Teams
+good_cutoff <- floor(0.35 * 32)    # Good Teams
+mid_cutoff <- floor(0.65 * 32)     # Mid Teams
+poor_cutoff <- floor(0.90 * 32)    # Poor Teams
+terrible_cutoff <- 32              # Terrible Teams
+
+# Create new 'team_status' column for categories above
+NFL_Data_Clean$team_status <- NA
+
+# Assign team categories based on rank
+NFL_Data_Clean$team_status[NFL_Data_Clean$rank <= top_cutoff] <- "Top"
+NFL_Data_Clean$team_status[NFL_Data_Clean$rank > top_cutoff & NFL_Data_Clean$rank <= good_cutoff] <- "Good"
+NFL_Data_Clean$team_status[NFL_Data_Clean$rank > good_cutoff & NFL_Data_Clean$rank <= mid_cutoff] <- "Mid"
+NFL_Data_Clean$team_status[NFL_Data_Clean$rank > mid_cutoff & NFL_Data_Clean$rank <= poor_cutoff] <- "Poor"
+NFL_Data_Clean$team_status[NFL_Data_Clean$rank > poor_cutoff & NFL_Data_Clean$rank <= terrible_cutoff] <- "Terrible"                     
+```
+
+```{r}
+# Filter data by team status. Pre-aggregating set up
+top_teams <- NFL_Data_Clean |> filter(team_status == "Top")
+good_teams <- NFL_Data_Clean |> filter(team_status == "Good")
+mid_teams <- NFL_Data_Clean |> filter(team_status == "Mid")
+poor_teams <- NFL_Data_Clean |> filter(team_status == "Poor")
+terrible_teams <- NFL_Data_Clean |> filter(team_status == "Terrible")
+
+# Aggregate data
+combined_teams <- bind_rows(top_teams, good_teams, mid_teams, poor_teams, terrible_teams)
+
+aggregated_data <- combined_teams |>
+  group_by(year, team_status) |>
+  summarise(
+    avg_win_pct = round(mean(win_loss_perc, na.rm = TRUE), 3),
+    avg_rush_yds_per_att = round(mean(rush_yds_per_att, na.rm = TRUE), 1),
+    avg_pass_yds_per_att = round(mean(pass_net_yds_per_att, na.rm = TRUE), 1),
+    avg_int_per_pass_att = round(mean(pass_int / pass_att, na.rm = TRUE), 3),
+    avg_fumble_per_rush_att = round(mean(fumbles_lost / rush_att, na.rm = TRUE), 3),
+    avg_passing_tds = round(mean(pass_td, na.rm = TRUE), 1),
+    avg_rushing_tds = round(mean(rush_td, na.rm = TRUE), 1),
+    avg_plays_offense = round(mean(plays_offense, na.rm = TRUE), 1),
+    normalized_passing_tds_per_play = round(avg_passing_tds / avg_plays_offense, 3),
+    normalized_rushing_tds_per_play = round(avg_rushing_tds / avg_plays_offense, 3),
+    .groups = 'drop'
+  )
+
+head(aggregated_data)
+```
+
+
+
+```{r}
+### Exploratory Data Analysis
+# Data Visualizations for Q1: Relationship between avg_rush_yds_per_att/avg_pass_yds_per_att and avg_win_pct
+
+aggregated_data$team_status <- factor(aggregated_data$team_status,
+                                      levels = c("Terrible", "Poor", "Mid", "Good", "Top"))
+
+############################################
+### SCATTERPLOTS ###
+# Scatterplots: avg_win_pct vs avg_rush_yds_per_att 
+ggplot(aggregated_data, aes(x = avg_rush_yds_per_att, y = avg_win_pct, color = team_status)) +
+  geom_point() +
+  scale_color_manual(values = c("Top" = "#006400", "Good" = "#2e8b57",
+                                "Mid" = "#9acd32", "Poor" = "#ff8c00",
+                                "Terrible" = "#b22222")) +
+  labs(title = "Average Win Percentage vs. Average Rush Yards Per Attempt",
+       x = "Average Rush Yards Per Attempt", y = "Average Win Percentage")
+
+# Scatterplots: avg_win_pct vs avg_pass_yds_per_att
+ggplot(aggregated_data, aes(x = avg_pass_yds_per_att, y = avg_win_pct, color = team_status)) +
+  geom_point() +
+  scale_color_manual(values = c("Top" = "#006400", "Good" = "#2e8b57",
+                                "Mid" = "#9acd32", "Poor" = "#ff8c00",
+                                "Terrible" = "#b22222")) +
+  labs(title = "Average Win Percentage vs. Average Pass Yards Per Attempt",
+       x = "Average Pass Yards Per Attempt", y = "Average Win Percentage")
+############################################
+```
+
+```{r}
+### Data Visualizations For Q2: Rushing or Passing TD's a bigger indicator of winning?
+
+# Data transforming for average normalized data. Needed for bar plots.
+aggregated_data_avg <- aggregated_data |>
+  group_by(team_status) |>
+  summarise(
+    avg_normalized_passing_tds_per_play = mean(normalized_passing_tds_per_play, na.rm = TRUE),
+    avg_normalized_rushing_tds_per_play = mean(normalized_rushing_tds_per_play, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+### BAR PLOTS ###
+############################################
+# Bar plot for Average Normalized Passing TD's per Play by Tier
+ggplot(aggregated_data_avg, aes(x = team_status, y = avg_normalized_passing_tds_per_play, fill = team_status)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Average Normalized Passing TDs per Play by Team Tier",
+       x = "Team Tier",
+       y = "Average Normalized Passing TDs per Play") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Bar plot for Average Normalized Rushing TD's per Play by Tier
+ggplot(aggregated_data_avg, aes(x = team_status, y = avg_normalized_rushing_tds_per_play, fill = team_status)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Average Normalized Rushing TDs per Play by Team Tier",
+       x = "Team Tier",
+       y = "Average Normalized Rushing TDs per Play") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+############################################
+
+### BOXPLOTS ###
+############################################
+# Normalized Passing TDs per Play by Tier
+ggplot(aggregated_data, aes(x = team_status, y = normalized_passing_tds_per_play, fill = team_status)) +
+  geom_boxplot() +
+  labs(title = "Distribution of Normalized Passing TDs per Play by Team Tier",
+       x = "Team Tier", y = "Normalized Passing TDs per Play") +
+  theme_minimal()
+
+# Normalized Rushing TDs per Play by Tier
+ggplot(aggregated_data, aes(x = team_status, y = normalized_rushing_tds_per_play, fill = team_status)) +
+  geom_boxplot() +
+  labs(title = "Distribution of Normalized Rushing TDs per Play by Team Tier",
+       x = "Team Tier", y = "Normalized Rushing TDs per Play") +
+  theme_minimal()
+############################################
+```
+
+
+```{r}
+### Data Visualizations for Q3: Interceptions or Fumbles more detrimental to winning?
+### BOXPLOTS ###
+############################################
+ggplot(aggregated_data, aes(x = team_status, y = avg_fumble_per_rush_att, fill = team_status)) +
+  geom_boxplot() +
+  labs(title = "Average Fumbles per Rush Attempt by Team Tier",
+       x = "Team Tier", y = "Average Fumbles Lost per Rush Attempt") +
+  theme_minimal()
+
+ggplot(aggregated_data, aes(x = team_status, y = avg_int_per_pass_att, fill = team_status)) +
+  geom_boxplot() +
+  labs(title = "Average Interceptions per Pass Attempt by Team Tier",
+       x = "Team Tier", y = "Average Interceptions Thrown per Pass Attempt") +
+  theme_minimal()
+```
+
+
+```{r}
+### Inferential Analysis for Sub-question 1
+
+# Correlation Matrix
+cor_matrix <- cor(aggregated_data |>
+                    select(avg_win_pct, avg_rush_yds_per_att, avg_pass_yds_per_att),
+                  use = "complete.obs")
+
+print(cor_matrix)
+```
+
+```{r}
+# Linear Regression Model
+l_model <- lm(avg_win_pct ~ avg_rush_yds_per_att + avg_pass_yds_per_att, data = aggregated_data)
+summary(l_model)
+```
+```{r}
+### Check Normality of Residuals
+
+# Get residuals
+residuals <- residuals(l_model)
+
+# Create histogram of residuals
+ggplot(data = aggregated_data, aes(x = residuals)) +
+  geom_histogram(binwidth = 0.075, fill = "skyblue", color = "black", alpha = 0.5) +
+  labs(title = "Histogram of Residuals", x = "Residuals", y = "Frequencey")
+```
+
+```{r}
+# Create Q-Q Plot to further check normality
+qqnorm(residuals)
+qqline(residuals, col = "red")
+```
+
+```{r}
+# Shapiro-Wilk Test to definitively check normality
+shapiro.test(residuals)
+```
+
+```{r}
+### Equal Variance Test
+
+# Visual Test
+fitted_values <- fitted(l_model)
+
+# Create plot
+plot(fitted_values, residuals(l_model),
+     main = "Residuals vs Fitted",
+     xlab = "Fitted (Predicted) Values",
+     ylab = "Residuals",
+     pch = 16,
+     col = "blue")
+abline(h = 0, col = "red")
+```
+
+```{r}
+# Equal Variance Formal Test
+bptest(l_model)
+```
+
+```{r}
+### Calculate Confidence Interval
+confint(l_model)
+```
+
